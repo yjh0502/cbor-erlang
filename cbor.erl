@@ -1,71 +1,58 @@
 -module(cbor).
 
--export([decode/1, decode_hf/1]).
+-export([decode/1, bench/0]).
 
 decode(List) when is_list(List) ->
     decode(hexstr_to_bin(List));
 decode(Data) ->
     build(tokenize(Data, [])).
 
-% small integers
-tokenize(<<Byte, T/binary>>, Acc) when Byte =< 16#17 -> tokenize(T, [Byte | Acc]);
-% 1, 2, 4, 8 byte integers
-tokenize(<<16#18, Num:8, T/binary>>, Acc) -> tokenize(T, [Num | Acc]);
-tokenize(<<16#19, Num:16, T/binary>>, Acc) -> tokenize(T, [Num | Acc]);
-tokenize(<<16#1a, Num:32, T/binary>>, Acc) -> tokenize(T, [Num | Acc]);
-tokenize(<<16#1b, Num:64, T/binary>>, Acc) -> tokenize(T, [Num | Acc]);
+-define(TK(N, EXPR), tokenize(<<N, T/binary>>,Acc) -> EXPR).
+-define(TK_ITEM(N, ITEM), ?TK(N, tokenize(T, [ITEM|Acc]))).
+-define(TK_SM(N), ?TK_ITEM(N, N)).
+-define(TK_NM(N), ?TK_ITEM(N, (16#1f-N))).
+-define(TK_STR(N), ?TK(N, tokenize_str((N-16#40), T, Acc))).
+-define(TK_UTF8(N), ?TK(N, tokenize_str((N-16#60), T, Acc))).
+-define(TK_ARR(N), ?TK_ITEM(N, ({list, N-16#80}))).
+-define(TK_MAP(N), ?TK_ITEM(N, ({map, N-16#a0}))).
 
-% small negative integers
-tokenize(<<Byte, T/binary>>, Acc) when Byte =< 16#37 -> tokenize(T, [16#1f - Byte | Acc]);
-% 1, 2, 4, 8 byte negative integers
-tokenize(<<16#38, Num:8, T/binary>>, Acc) -> tokenize(T, [-1-Num | Acc]);
-tokenize(<<16#39, Num:16, T/binary>>, Acc) -> tokenize(T, [-1-Num | Acc]);
-tokenize(<<16#3a, Num:32, T/binary>>, Acc) -> tokenize(T, [-1-Num | Acc]);
-tokenize(<<16#3b, Num:64, T/binary>>, Acc) -> tokenize(T, [-1-Num | Acc]);
+-define(TK_FIXED(BASE, NAME),
+    ?NAME((BASE+0)); ?NAME((BASE+1)); ?NAME((BASE+2)); ?NAME((BASE+3));
+    ?NAME((BASE+4)); ?NAME((BASE+5)); ?NAME((BASE+6)); ?NAME((BASE+7));
+    ?NAME((BASE+8)); ?NAME((BASE+9)); ?NAME((BASE+10)); ?NAME((BASE+11));
+    ?NAME((BASE+12)); ?NAME((BASE+13)); ?NAME((BASE+14)); ?NAME((BASE+15));
+    ?NAME((BASE+16)); ?NAME((BASE+17)); ?NAME((BASE+18)); ?NAME((BASE+19));
+    ?NAME((BASE+20)); ?NAME((BASE+21)); ?NAME((BASE+22)); ?NAME((BASE+23))
+).
+-define(TK_LENGTHED(BASE, EXPR),
+    tokenize(<<(BASE), Num:8, T/binary>>, Acc) -> EXPR;
+    tokenize(<<(BASE+1), Num:16, T/binary>>, Acc) -> EXPR;
+    tokenize(<<(BASE+2), Num:32, T/binary>>, Acc) -> EXPR;
+    tokenize(<<(BASE+3), Num:64, T/binary>>, Acc) -> EXPR).
 
-% fixed length strings
-tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#40 andalso Byte =< 16#57 ->
-    tokenize_str(Byte - 16#40, T, Acc);
-% N byte-lengthed strings
-tokenize(<<16#58, Len:8, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-tokenize(<<16#59, Len:16, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-tokenize(<<16#5a, Len:32, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-tokenize(<<16#5b, Len:64, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-% break terminating string
-tokenize(<<16#5f, T/binary>>, Acc) -> tokenize(T, [{str, break} | Acc]);
+-define(TK_LENGTHED_ITEM(BASE, ITEM), ?TK_LENGTHED(BASE, tokenize(T, [(ITEM) | Acc]))).
 
-% fixed length UTF-8
-tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#60 andalso Byte =< 16#77 ->
-    tokenize_str(Byte - 16#60, T, Acc);
-% N byte-lengthed UTF-8
-tokenize(<<16#78, Len:8, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-tokenize(<<16#79, Len:16, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-tokenize(<<16#7a, Len:32, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-tokenize(<<16#7b, Len:64, T/binary>>, Acc) -> tokenize_str(Len, T, Acc);
-% break terminating UTF-8
-tokenize(<<16#7f, T/binary>>, Acc) -> tokenize(T, [{str, break} | Acc]);
+?TK_FIXED(0, TK_SM); % small integers
+?TK_LENGTHED_ITEM(16#18, Num); % 1, 2, 4, 8 byte integers
 
-% fixed length array
-tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#80 andalso Byte =< 16#97 ->
-    tokenize(T, [{list, Byte - 16#80} | Acc]);
-% N byte-lengthed array
-tokenize(<<16#98, Len:8, T/binary>>, Acc) -> tokenize(T, [{list, Len} | Acc]);
-tokenize(<<16#99, Len:16, T/binary>>, Acc) -> tokenize(T, [{list, Len} | Acc]);
-tokenize(<<16#9a, Len:32, T/binary>>, Acc) -> tokenize(T, [{list, Len} | Acc]);
-tokenize(<<16#9b, Len:64, T/binary>>, Acc) -> tokenize(T, [{list, Len} | Acc]);
-% break terminating array
-tokenize(<<16#9f, T/binary>>, Acc) -> tokenize(T, [{list, break} | Acc]);
+?TK_FIXED(16#20, TK_NM); % small negative integers
+?TK_LENGTHED_ITEM(16#38, -1-Num); % 1, 2, 4, 8 byte negative integers
 
-% fixed length map
-tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#a0 andalso Byte =< 16#b7 ->
-    tokenize(T, [{map, Byte - 16#a0} | Acc]);
-% N byte-lengthed map
-tokenize(<<16#b8, Len:8, T/binary>>, Acc) -> tokenize(T, [{map, Len} | Acc]);
-tokenize(<<16#b9, Len:16, T/binary>>, Acc) -> tokenize(T, [{map, Len} | Acc]);
-tokenize(<<16#ba, Len:32, T/binary>>, Acc) -> tokenize(T, [{map, Len} | Acc]);
-tokenize(<<16#bb, Len:64, T/binary>>, Acc) -> tokenize(T, [{map, Len} | Acc]);
-% break terminating map
-tokenize(<<16#bf, T/binary>>, Acc) -> tokenize(T, [{map, break} | Acc]);
+?TK_FIXED(16#40, TK_STR); % small string
+?TK_LENGTHED(16#58, tokenize_str(Num, T, Acc)); % N byte-lengthed string
+?TK(16#5f, tokenize(T, [strb | Acc])); % break terminating string
+
+?TK_FIXED(16#60, TK_UTF8); % small UTF-8
+?TK_LENGTHED(16#78, tokenize_str(Num, T, Acc)); % N byte-lengthed UTF-8
+?TK(16#7f, tokenize(T, [strb | Acc])); % break terminating UTF-8
+
+?TK_FIXED(16#80, TK_ARR); % small array
+?TK_LENGTHED_ITEM(16#98, {list, Num}); % N byte-lengthed array
+?TK(16#9f, tokenize(T, [listb | Acc])); % break terminating array
+
+?TK_FIXED(16#a0, TK_MAP); % small map
+?TK_LENGTHED_ITEM(16#b8, {map, Num}); % N byte-lengthed map
+?TK(16#bf, tokenize(T, [mapb | Acc])); % break terminating array
 
 % text-based date/time
 tokenize(<<16#c0, T/binary>>, Acc) -> tokenize(T, [timetext | Acc]);
@@ -87,10 +74,7 @@ tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#c6 andalso Byte =< 16#d4 ->
 tokenize(<<Byte, _T/binary>>, _Acc) when Byte >= 16#d5 andalso Byte =< 16#d7 ->
     throw(not_implemented);
 % N byte-tagged item, 32:URL, 33:base64url, 34:base64, 35:regex, 36:mime, 55799: selfdesc
-tokenize(<<16#d8, Len:8, T/binary>>, Acc) -> tokenize(T, [{tag, Len} | Acc]);
-tokenize(<<16#d9, Len:16, T/binary>>, Acc) -> tokenize(T, [{tag, Len} | Acc]);
-tokenize(<<16#da, Len:32, T/binary>>, Acc) -> tokenize(T, [{tag, Len} | Acc]);
-tokenize(<<16#db, Len:64, T/binary>>, Acc) -> tokenize(T, [{tag, Len} | Acc]);
+?TK_LENGTHED_ITEM(16#d8, {tag, Num});
 % simple value
 tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#e0 andalso Byte =< 16#f3 ->
     tokenize(T, [{simple, Byte - 16#e0} | Acc]);
@@ -123,16 +107,16 @@ build([break | Tail], Acc) ->
     {Item, Tail2} = build(Tail, []),
     build(Tail2, [Item | Acc]);
 
-build([{list, break} | Tail], Acc) -> {Acc, Tail};
-build([{str, break} | Tail], Acc) -> {iolist_to_binary(Acc), Tail};
-build([{map, break} | Tail], Acc) -> {build_map(Acc), Tail};
+build([listb | Tail], Acc) -> {Acc, Tail};
+build([strb | Tail], Acc) -> {iolist_to_binary(Acc), Tail};
+build([mapb | Tail], Acc) -> {build_map(Acc), Tail};
 
 % handle fixed-length items
 build([{list, N} | Tail], Acc) ->
-    {NList, Tail2} = reverse_n(N, Acc),
+    {NList, Tail2} = reverse_n(N, Acc, []),
     build(Tail, [lists:reverse(NList) | Tail2]);
 build([{map, N} | Tail], Acc) ->
-    {NList, Tail2} = reverse_n(N*2, Acc),
+    {NList, Tail2} = reverse_n(N*2, Acc, []),
     build(Tail, [build_map(lists:reverse(NList)) | Tail2]);
 
 % bignums
@@ -154,15 +138,12 @@ build([Token | Tail], Acc) -> build(Tail, [Token | Acc]);
 
 build([], [Item]) -> Item;
 
-build(Tokens, Stack) ->
-    io:format("invalid state: token:~p, stack:~p~n", [Tokens, Stack]),
-    throw(invalid).
+build(_, _) -> throw(invalid).
 
-build_map(List) -> build_map(List, #{}).
-build_map([K, V | Tail], Map) -> build_map(Tail, maps:put(K, V, Map));
-build_map([], Acc) -> Acc.
+build_map(List) -> build_map(List, []).
+build_map([K, V | Tail], Acc) -> build_map(Tail, [{K, V} | Acc]);
+build_map([], Acc) -> maps:from_list(Acc).
 
-reverse_n(N, List) -> reverse_n(N, List, []).
 reverse_n(0, List, Acc) -> {Acc, List};
 reverse_n(N, [Hd | Tl], Acc) -> reverse_n(N-1, Tl, [Hd | Acc]).
 
@@ -180,12 +161,12 @@ decode_hf(<<Sign:1, Exp:5, Frac:10>>) ->
     <<Value:32/float>> = <<Sign:1, Exp32:8, Frac:10, 0:13>>, Value.
 
 % Erlang does not support binary matching for nan/inf, so emulate it
-decode_sf(<<Value:32/float>>)-> Value; 
+decode_sf(<<Value:32/float>>)-> Value;
 decode_sf(<<0:1, 255:8, 0:23>>) -> inf;
 decode_sf(<<1:1, 255:8, 0:23>>) -> neginf;
 decode_sf(<<_:1, 255:8, _:23>>) -> nan.
 
-decode_df(<<Value:64/float>>)-> Value; 
+decode_df(<<Value:64/float>>)-> Value;
 decode_df(<<0:1, 2047:11, 0:52>>) -> inf;
 decode_df(<<1:1, 2047:11, 0:52>>) -> neginf;
 decode_df(<<_:1, 2047:11, _:52>>) -> nan.
@@ -205,11 +186,11 @@ int(C) when $A =< C, C =< $F ->
     C - $A + 10;
 int(C) when $a =< C, C =< $f ->
     C - $a + 10.
-    
+
 to_hex(N) when N < 256 ->
     [hex(N div 16), hex(N rem 16)].
- 
-list_to_hexstr([]) -> 
+
+list_to_hexstr([]) ->
     [];
 list_to_hexstr([H|T]) ->
     to_hex(H) ++ list_to_hexstr(T).
@@ -295,7 +276,7 @@ rfc_value_test() ->
         {"6449455446", <<"IETF">>},
         {"62225c", <<"\"\\">>},
         % All unicodes are decoded to binaries, to check binary values
-        {"62c3bc", <<16#c3, 16#bc>>}, 
+        {"62c3bc", <<16#c3, 16#bc>>},
         {"63e6b0b4", <<16#e6, 16#b0, 16#b4>>},
         {"64f0908591", <<16#f0, 16#90, 16#85, 16#91>>}
     ],
@@ -328,33 +309,52 @@ rfc_data_test() ->
         % TODO
         %(_ h'0102', h'030405')       5f42010243030405ff
         {"7f657374726561646d696e67ff",
-            [break, <<"ming">>, <<"strea">>, {str, break}],
+            [break, <<"ming">>, <<"strea">>, strb],
             <<"streaming">>},
-        {"9fff", [break, {list, break}], []},
+        {"9fff", [break, listb], []},
         {"9f018202039f0405ffff",
-            [break, break, 5, 4, {list, break}, 3, 2, {list, 2}, 1, {list, break}],
+            [break, break, 5, 4, listb, 3, 2, {list, 2}, 1, listb],
             [1, [2, 3], [4, 5]]},
         {"9f01820203820405ff",
-            [break, 5, 4, {list, 2}, 3, 2, {list, 2}, 1, {list, break}],
+            [break, 5, 4, {list, 2}, 3, 2, {list, 2}, 1, listb],
             [1, [2, 3], [4, 5]]},
         {"83018202039f0405ff",
-            [break, 5, 4, {list, break}, 3, 2, {list, 2}, 1, {list, 3}],
+            [break, 5, 4, listb, 3, 2, {list, 2}, 1, {list, 3}],
             [1, [2, 3], [4, 5]]},
         {"83019f0203ff820405",
-            [5, 4, {list, 2}, break, 3, 2, {list, break}, 1, {list, 3}],
+            [5, 4, {list, 2}, break, 3, 2, listb, 1, {list, 3}],
             [1, [2, 3], [4, 5]]},
         {"9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff",
-            [break,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,{list,break}],
+            [break,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,listb],
             [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},
         {"bf61610161629f0203ffff",
-            [break, break, 3, 2, {list, break}, <<"b">>, 1, <<"a">>, {map, break}],
+            [break, break, 3, 2, listb, <<"b">>, 1, <<"a">>, mapb],
             #{<<"a">> => 1, <<"b">> => [2, 3]}},
-        {"826161bf61626163ff", [break, <<"c">>, <<"b">>, {map, break}, <<"a">>, {list, 2}],
+        {"826161bf61626163ff", [break, <<"c">>, <<"b">>, mapb, <<"a">>, {list, 2}],
             [<<"a">>, #{<<"b">> => <<"c">>}]},
-        {"bf6346756ef563416d7421ff", [break, -2, <<"Amt">>, true, <<"Fun">>, {map, break}],
+        {"bf6346756ef563416d7421ff", [break, -2, <<"Amt">>, true, <<"Fun">>, mapb],
             #{<<"Fun">> => true, <<"Amt">> => -2}}
     ],
     lists:foreach(fun({Hex, Tokens, Result}) ->
         ?assertEqual(Tokens, tokenize(hexstr_to_bin(Hex), [])),
         ?assertEqual(Result, build(Tokens))
     end, Testcases).
+
+bench() ->
+    Tc = [
+        {"nd list", "9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff"},
+        {"fixed list", "98190102030405060708090a0b0c0d0e0f101112131415161718181819"},
+        {"fixed map", "a56161614161626142616361436164614461656145"},
+        {"nested", "bf61610161629f0203ffff"}
+    ],
+    N = 300000,
+    lists:foreach(fun({Name, Hex}) ->
+        Bin = hexstr_to_bin(Hex),
+        {Usec, ok} = timer:tc(fun() -> repeat_n(N, Bin) end),
+        io:format("~s: ~p #/s ~.4f us/# ~n", [Name, N * 1000000 div Usec, Usec / N])
+    end, Tc).
+
+repeat_n(0, _) -> ok;
+repeat_n(N, Bin) ->
+    decode(Bin),
+    repeat_n(N-1, Bin).
