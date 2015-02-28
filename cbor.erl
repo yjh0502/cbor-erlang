@@ -8,13 +8,16 @@ decode(Data) ->
     build(tokenize(Data, [])).
 
 -define(TK(N, EXPR), tokenize(<<N, T/binary>>,Acc) -> EXPR).
--define(TK_ITEM(N, ITEM), ?TK(N, tokenize(T, [ITEM|Acc]))).
+-define(TK_ITEM(N, ITEM), ?TK(N, tokenize(T, [(ITEM)|Acc]))).
 -define(TK_SM(N), ?TK_ITEM(N, N)).
--define(TK_NM(N), ?TK_ITEM(N, (16#1f-N))).
+-define(TK_NM(N), ?TK_ITEM(N, 16#1f-N)).
 -define(TK_STR(N), ?TK(N, tokenize_str((N-16#40), T, Acc))).
 -define(TK_UTF8(N), ?TK(N, tokenize_str((N-16#60), T, Acc))).
--define(TK_ARR(N), ?TK_ITEM(N, ({list, N-16#80}))).
--define(TK_MAP(N), ?TK_ITEM(N, ({map, N-16#a0}))).
+-define(TK_ARR(N), ?TK_ITEM(N, {list, N-16#80})).
+-define(TK_MAP(N), ?TK_ITEM(N, {map, N-16#a0})).
+-define(TK_TAG(N), ?TK_ITEM(N, {tag, N - 16#c0})).
+-define(TK_SIMPLE(N), ?TK_ITEM(N, {simple, N - 16#e0})).
+-define(TK_NI(N), tokenize(<<N, _/binary>>,_) -> throw(not_implemented)).
 
 -define(TK_FIXED(BASE, NAME),
     ?NAME((BASE+0)); ?NAME((BASE+1)); ?NAME((BASE+2)); ?NAME((BASE+3));
@@ -67,17 +70,22 @@ tokenize(<<16#c3, T/binary>>, Acc) -> tokenize(T, [negbignum | Acc]);
 tokenize(<<16#c4, _T/binary>>, _Acc) -> throw(not_implemented);
 % bigfloat
 tokenize(<<16#c5, _T/binary>>, _Acc) -> throw(not_implemented);
+
 % tagged item: 6~20, unassigned
-tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#c6 andalso Byte =< 16#d4 ->
-    tokenize(T, [{tag, Byte - 16#c0} | Acc]);
+?TK_TAG(16#c6); ?TK_TAG(16#c7); ?TK_TAG(16#c8); ?TK_TAG(16#c9);
+?TK_TAG(16#ca); ?TK_TAG(16#cb); ?TK_TAG(16#cc); ?TK_TAG(16#cd);
+?TK_TAG(16#ce); ?TK_TAG(16#cf); ?TK_TAG(16#d0); ?TK_TAG(16#d1);
+?TK_TAG(16#d2); ?TK_TAG(16#d3); ?TK_TAG(16#d4);
 % expected conversion, 21:base64, 22:base16, 23:encoded CBOR
-tokenize(<<Byte, _T/binary>>, _Acc) when Byte >= 16#d5 andalso Byte =< 16#d7 ->
-    throw(not_implemented);
+?TK_NI(16#d5); ?TK_NI(16#d6); ?TK_NI(16#d7);
 % N byte-tagged item, 32:URL, 33:base64url, 34:base64, 35:regex, 36:mime, 55799: selfdesc
 ?TK_LENGTHED_ITEM(16#d8, {tag, Num});
 % simple value
-tokenize(<<Byte, T/binary>>, Acc) when Byte >= 16#e0 andalso Byte =< 16#f3 ->
-    tokenize(T, [{simple, Byte - 16#e0} | Acc]);
+?TK_SIMPLE(16#e0); ?TK_SIMPLE(16#e1); ?TK_SIMPLE(16#e2); ?TK_SIMPLE(16#e3);
+?TK_SIMPLE(16#e4); ?TK_SIMPLE(16#e5); ?TK_SIMPLE(16#e6); ?TK_SIMPLE(16#e7);
+?TK_SIMPLE(16#e8); ?TK_SIMPLE(16#e9); ?TK_SIMPLE(16#ea); ?TK_SIMPLE(16#eb);
+?TK_SIMPLE(16#ec); ?TK_SIMPLE(16#ed); ?TK_SIMPLE(16#ee); ?TK_SIMPLE(16#ef);
+?TK_SIMPLE(16#f0); ?TK_SIMPLE(16#f1); ?TK_SIMPLE(16#f2); ?TK_SIMPLE(16#f3);
 
 % atoms
 tokenize(<<16#f4, T/binary>>, Acc) -> tokenize(T, [false | Acc]);
