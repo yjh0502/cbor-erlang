@@ -1,7 +1,82 @@
 -module(cbor).
 
--export([decode/1]).
+-export([decode/1, encode/1]).
 
+% encoder
+encode(false) -> <<16#f4>>;
+encode(true) -> <<16#f5>>;
+encode(null) -> <<16#f6>>;
+encode(undefined) -> <<16#f7>>;
+encode(inf) -> <<16#f9, 16#7c, 0>>; % translate floating-point value atoms
+encode(neginf) -> <<16#f9, 16#fc, 0>>;
+encode(nan) -> <<16#f9, 16#fc, 1>>;
+encode(Num) when is_integer(Num) -> encode_num(Num);
+encode(Float) when is_float(Float) -> encode_float(Float);
+encode(Bin) when is_binary(Bin) -> encode_bin(Bin);
+encode(List) when is_list(List) -> [<<16#9f>>, lists:map(fun encode/1, List), <<16#ff>>];
+encode(Map) when is_map(Map) ->
+    [<<16#bf>>, lists:map(fun({K, V}) -> [encode(K), encode(V)] end, maps:to_list(Map)), <<16#ff>>];
+encode({tag, N, Data}) -> encode_tag(N, Data);
+encode({timetext, Data}) -> encode({tag, 0, Data});
+encode({timeepoch, Data}) -> encode({tag, 1, Data});
+encode({simple, N}) -> encode_simple(N);
+encode(Term) -> throw({invalid, Term}).
+
+encode_float(Float) when is_float(Float) -> <<16#fb, Float:64/float>>. % TODO: add canonical impl
+
+% positive bignums
+encode_num(N) when N > 18446744073709551615 ->
+    Len = bignum_bytes(N) * 8,
+    [<<16#c2>>, encode_bin(<<N:(Len)>>)];
+
+% positive integers
+encode_num(N) when N > 16#ffffffff -> <<16#1b, N:64>>;
+encode_num(N) when N > 16#ffff -> <<16#1a, N:32>>;
+encode_num(N) when N > 16#ff -> <<16#19, N:16>>;
+encode_num(N) when N > 23 -> <<16#18, N:8>>;
+encode_num(N) when N >= 0 -> <<N:8>>;
+
+% nagative integers
+encode_num(N) when N > -25 -> <<(16#1f-N):8>>;
+encode_num(N) when N >= -16#ff -> <<16#38, (-1-N):8>>;
+encode_num(N) when N >= -16#ffff -> <<16#39, (-1-N):16>>;
+encode_num(N) when N >= -16#ffffffff -> <<16#3a, (-1-N):32>>;
+encode_num(N) when N >= -16#ffffffffffffffff -> <<16#3b, (-1-N):64>>;
+encode_num(N) when is_integer(N) ->
+    Inv = -1-N,
+    Len = bignum_bytes(Inv) * 8,
+    [<<16#c3>>, encode_bin(<<Inv:(Len)>>)].
+
+bignum_bytes(N) when N > 255 -> 1 + bignum_bytes(N div 256);
+bignum_bytes(_) -> 1.
+
+encode_bin(Bin) when byte_size(Bin) =< 16#17 ->
+    [<<(byte_size(Bin) + 16#40)>>, Bin];
+encode_bin(Bin) when byte_size(Bin) =< 16#ff ->
+    [<<16#58, (byte_size(Bin)):8>>, Bin];
+encode_bin(Bin) when byte_size(Bin) =< 16#ffff ->
+    [<<16#59, (byte_size(Bin)):16>>, Bin];
+encode_bin(Bin) when byte_size(Bin) =< 16#ffffffff ->
+    [<<16#5a, (byte_size(Bin)):32>>, Bin];
+encode_bin(Bin) when byte_size(Bin) =< 16#ffffffffffffffff ->
+    [<<16#5b, (byte_size(Bin)):64>>, Bin];
+encode_bin(_) -> throw(not_implemented).
+
+encode_tag(N, Data) when N =< 16#17 ->
+    [<<(N + 16#c0)>>, encode(Data)];
+encode_tag(N, Data) when N =< 16#ff ->
+    [<<16#d8, (N):8>>, encode(Data)];
+encode_tag(N, Data) when N =< 16#ffff ->
+    [<<16#d9, (N):16>>, encode(Data)];
+encode_tag(N, Data) when N =< 16#ffffffff ->
+    [<<16#da, (N):32>>, encode(Data)];
+encode_tag(N, Data) when N =< 16#ffffffffffff ->
+    [<<16#db, (N):64>>, encode(Data)].
+
+encode_simple(N) when N =< 19 -> <<(N + 16#e0)>>;
+encode_simple(N) when N =< 16#ff -> <<16#f8, N>>.
+
+% decoder
 decode(List) when is_list(List) ->
     decode(hexstr_to_bin(List));
 decode(Data) ->
@@ -140,7 +215,7 @@ build([Token | Tail], Acc) -> build(Tail, [Token | Acc]);
 
 build([], [Item]) -> Item;
 
-build(_, _) -> throw(invalid).
+build(Tokens, Stacks) -> throw({invalid, Tokens, Stacks}).
 
 build_map(List) -> build_map(List, []).
 build_map([K, V | Tail], Acc) -> build_map(Tail, [{K, V} | Acc]);
@@ -197,7 +272,10 @@ hexstr_to_list([]) ->
 
 rfc_value_test_() ->
     % testcases from RFC7049, single value
-    [?_assertEqual(Result, decode(hexstr_to_bin(Hex))) || {Hex, Result} <- [
+    lists:flatten([[
+        ?_assertEqual(Result, decode(hexstr_to_bin(Hex))),
+        ?_assertEqual(Result, decode(iolist_to_binary(encode(Result))))
+    ] || {Hex, Result} <- [
         {"00", 0},
         {"01", 1},
         {"0a", 10},
@@ -263,14 +341,15 @@ rfc_value_test_() ->
         {"62c3bc", <<16#c3, 16#bc>>},
         {"63e6b0b4", <<16#e6, 16#b0, 16#b4>>},
         {"64f0908591", <<16#f0, 16#90, 16#85, 16#91>>}
-    ]].
+    ]]).
 
 rfc_data_test_() ->
     % testcases from RFC7049, datastructures
     lists:flatten([[
         ?_assertEqual(Tokens, tokenize(hexstr_to_bin(Hex), [])),
-        ?_assertEqual(Result, build(Tokens))
-    ]|| {Hex, Tokens, Result} <- [
+        ?_assertEqual(Result, build(Tokens)),
+        ?_assertEqual(Result, decode(iolist_to_binary(encode(Result))))
+    ] || {Hex, Tokens, Result} <- [
         {"80", [{list, 0}], []},
         {"83010203", [3, 2, 1, {list, 3}], [1, 2, 3]},
         {"8301820203820405", [5, 4, {list, 2}, 3, 2, {list, 2}, 1, {list, 3}], [1, [2, 3], [4, 5]]},
