@@ -57,19 +57,13 @@ decode(Data) ->
 ?TK_LENGTHED_ITEM(16#b8, {map, Num}); % N byte-lengthed map
 ?TK(16#bf, tokenize(T, [mapb | Acc])); % break terminating array
 
-% text-based date/time
-tokenize(<<16#c0, T/binary>>, Acc) -> tokenize(T, [timetext | Acc]);
-% epoch-based date/time
-tokenize(<<16#c1, T/binary>>, Acc) -> tokenize(T, [timeepoch | Acc]);
-% positive bignum
-tokenize(<<16#c2, T/binary>>, Acc) -> tokenize(T, [posbignum | Acc]);
-% negative bignum
-tokenize(<<16#c3, T/binary>>, Acc) -> tokenize(T, [negbignum | Acc]);
+?TK(16#c0, tokenize(T, [timetext | Acc])); % text-based date/time
+?TK(16#c1, tokenize(T, [timeepoch | Acc])); % epoch-based date/time
+?TK(16#c2, tokenize(T, [posbignum | Acc])); % positive bignum
+?TK(16#c3, tokenize(T, [negbignum | Acc])); % negative bignum
 
-% decimal fraction
-tokenize(<<16#c4, _T/binary>>, _Acc) -> throw(not_implemented);
-% bigfloat
-tokenize(<<16#c5, _T/binary>>, _Acc) -> throw(not_implemented);
+?TK_NI(16#c4); % decimal fraction
+?TK_NI(16#c5); % bigfloat
 
 % tagged item: 6~20, unassigned
 ?TK_TAG(16#c6); ?TK_TAG(16#c7); ?TK_TAG(16#c8); ?TK_TAG(16#c9);
@@ -88,19 +82,20 @@ tokenize(<<16#c5, _T/binary>>, _Acc) -> throw(not_implemented);
 ?TK_SIMPLE(16#f0); ?TK_SIMPLE(16#f1); ?TK_SIMPLE(16#f2); ?TK_SIMPLE(16#f3);
 
 % atoms
-tokenize(<<16#f4, T/binary>>, Acc) -> tokenize(T, [false | Acc]);
-tokenize(<<16#f5, T/binary>>, Acc) -> tokenize(T, [true | Acc]);
-tokenize(<<16#f6, T/binary>>, Acc) -> tokenize(T, [null| Acc]);
-tokenize(<<16#f7, T/binary>>, Acc) -> tokenize(T, [undefined | Acc]);
+?TK_ITEM(16#f4, false);
+?TK_ITEM(16#f5, true);
+?TK_ITEM(16#f6, null);
+?TK_ITEM(16#f7, undefined);
 
 % simple value, one byte follows
 tokenize(<<16#f8, Value, T/binary>>, Acc) -> tokenize(T, [{simple, Value} | Acc]);
+
 % N byte floats
 tokenize(<<16#f9, Value:2/binary, T/binary>>, Acc) -> tokenize(T, [decode_hf(Value) | Acc]);
 tokenize(<<16#fa, Value:4/binary, T/binary>>, Acc) -> tokenize(T, [decode_sf(Value) | Acc]);
 tokenize(<<16#fb, Value:8/binary, T/binary>>, Acc) -> tokenize(T, [decode_df(Value) | Acc]);
 
-tokenize(<<16#ff, T/binary>>, Acc) -> tokenize(T, [break | Acc]);
+?TK_ITEM(16#ff, break);
 tokenize(<<>>, Acc) -> Acc;
 tokenize(_Data, _Acc) -> throw(invalid).
 
@@ -183,28 +178,12 @@ hf_norm(Frac, Count) when Frac < 1024 -> hf_norm(Frac * 2, Count+1);
 hf_norm(Frac, Count) -> {Frac, Count}.
 
 %% helper functions
-hex(N) when N < 10 ->
-    $0+N;
-hex(N) when N >= 10, N < 16 ->
-    $a+(N-10).
-
 int(C) when $0 =< C, C =< $9 ->
     C - $0;
 int(C) when $A =< C, C =< $F ->
     C - $A + 10;
 int(C) when $a =< C, C =< $f ->
     C - $a + 10.
-
-to_hex(N) when N < 256 ->
-    [hex(N div 16), hex(N rem 16)].
-
-list_to_hexstr([]) ->
-    [];
-list_to_hexstr([H|T]) ->
-    to_hex(H) ++ list_to_hexstr(T).
-
-bin_to_hexstr(Bin) ->
-    list_to_hexstr(binary_to_list(Bin)).
 
 hexstr_to_bin(S) ->
     list_to_binary(hexstr_to_list(S)).
@@ -358,11 +337,10 @@ bench() ->
     N = 300000,
     lists:foreach(fun({Name, Hex}) ->
         Bin = hexstr_to_bin(Hex),
-        {Usec, ok} = timer:tc(fun() -> repeat_n(N, Bin) end),
-        io:format("~s: ~p #/s ~.4f us/# ~n", [Name, N * 1000000 div Usec, Usec / N])
+        {Usec, ok} = timer:tc(fun() -> repeat_decode_n(N, Bin) end),
+        io:format("~s: ~p #/s ~.4f us/# ~.2f MB/s~n",
+            [Name, N * 1000000 div Usec, Usec / N, byte_size(Bin) * N / Usec])
     end, Tc).
 
-repeat_n(0, _) -> ok;
-repeat_n(N, Bin) ->
-    decode(Bin),
-    repeat_n(N-1, Bin).
+repeat_decode_n(0, _) -> ok;
+repeat_decode_n(N, Bin) -> decode(Bin), repeat_decode_n(N-1, Bin).

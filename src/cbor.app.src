@@ -1,0 +1,14 @@
+{application, cbor,
+ [
+  {description, "An Erlang cbor library"},
+  {vsn, "1"},
+  {modules, [
+             cbor
+            ]},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {env, []}
+ ]}.
