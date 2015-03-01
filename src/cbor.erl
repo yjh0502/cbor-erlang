@@ -195,9 +195,9 @@ hexstr_to_list([]) ->
 % unit tests
 -include_lib("eunit/include/eunit.hrl").
 
-rfc_value_test() ->
+rfc_value_test_() ->
     % testcases from RFC7049, single value
-    Testcases = [
+    [?_assertEqual(Result, decode(hexstr_to_bin(Hex))) || {Hex, Result} <- [
         {"00", 0},
         {"01", 1},
         {"0a", 10},
@@ -263,14 +263,14 @@ rfc_value_test() ->
         {"62c3bc", <<16#c3, 16#bc>>},
         {"63e6b0b4", <<16#e6, 16#b0, 16#b4>>},
         {"64f0908591", <<16#f0, 16#90, 16#85, 16#91>>}
-    ],
-    lists:foreach(fun({Hex, Result}) ->
-        ?assertEqual(Result, decode(hexstr_to_bin(Hex)))
-    end, Testcases).
+    ]].
 
-rfc_data_test() ->
+rfc_data_test_() ->
     % testcases from RFC7049, datastructures
-    Testcases = [
+    lists:flatten([[
+        ?_assertEqual(Tokens, tokenize(hexstr_to_bin(Hex), [])),
+        ?_assertEqual(Result, build(Tokens))
+    ]|| {Hex, Tokens, Result} <- [
         {"80", [{list, 0}], []},
         {"83010203", [3, 2, 1, {list, 3}], [1, 2, 3]},
         {"8301820203820405", [5, 4, {list, 2}, 3, 2, {list, 2}, 1, {list, 3}], [1, [2, 3], [4, 5]]},
@@ -317,11 +317,7 @@ rfc_data_test() ->
             [<<"a">>, #{<<"b">> => <<"c">>}]},
         {"bf6346756ef563416d7421ff", [break, -2, <<"Amt">>, true, <<"Fun">>, mapb],
             #{<<"Fun">> => true, <<"Amt">> => -2}}
-    ],
-    lists:foreach(fun({Hex, Tokens, Result}) ->
-        ?assertEqual(Tokens, tokenize(hexstr_to_bin(Hex), [])),
-        ?assertEqual(Result, build(Tokens))
-    end, Testcases).
+    ]]).
 
 bench_test() ->
     Tc = [
