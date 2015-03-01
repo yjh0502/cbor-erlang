@@ -1,6 +1,6 @@
 -module(cbor).
 
--export([decode/1, bench/0]).
+-export([decode/1]).
 
 decode(List) when is_list(List) ->
     decode(hexstr_to_bin(List));
@@ -65,13 +65,12 @@ decode(Data) ->
 ?TK_NI(16#c4); % decimal fraction
 ?TK_NI(16#c5); % bigfloat
 
-% tagged item: 6~20, unassigned
+% tagged item: 6~20:unassigned, 21:base64, 22:base16, 23:encoded CBOR
 ?TK_TAG(16#c6); ?TK_TAG(16#c7); ?TK_TAG(16#c8); ?TK_TAG(16#c9);
 ?TK_TAG(16#ca); ?TK_TAG(16#cb); ?TK_TAG(16#cc); ?TK_TAG(16#cd);
 ?TK_TAG(16#ce); ?TK_TAG(16#cf); ?TK_TAG(16#d0); ?TK_TAG(16#d1);
-?TK_TAG(16#d2); ?TK_TAG(16#d3); ?TK_TAG(16#d4);
-% expected conversion, 21:base64, 22:base16, 23:encoded CBOR
-?TK_NI(16#d5); ?TK_NI(16#d6); ?TK_NI(16#d7);
+?TK_TAG(16#d2); ?TK_TAG(16#d3); ?TK_TAG(16#d4); ?TK_TAG(16#d5);
+?TK_TAG(16#d6); ?TK_TAG(16#d7);
 % N byte-tagged item, 32:URL, 33:base64url, 34:base64, 35:regex, 36:mime, 55799: selfdesc
 ?TK_LENGTHED_ITEM(16#d8, {tag, Num});
 % simple value
@@ -251,13 +250,11 @@ rfc_value_test() ->
         {"c074323031332d30332d32315432303a30343a30305a", {timetext, <<"2013-03-21T20:04:00Z">>}},
         {"c11a514b67b0", {timeepoch, 1363896240}},
         {"c1fb41d452d9ec200000", {timeepoch, 1363896240.5}},
-        % TODO
-        %23(h'01020304')              d74401020304
-        %24(h'6449455446')            d818456449455446
-        %32("http://www.example.com") d82076687474703a2f2f7777772e6578
-        %                             616d706c652e636f6d
-        %h''                          40
-        %h'01020304'                  4401020304
+        {"d74401020304", {tag, 23, <<1, 2, 3, 4>>}},
+        {"d818456449455446", {tag, 24, <<"dIETF">>}},
+        {"d82076687474703a2f2f7777772e6578616d706c652e636f6d", {tag, 32, <<"http://www.example.com">>}},
+        {"40", <<"">>},
+        {"4401020304", <<1, 2, 3, 4>>},
         {"60", <<"">>},
         {"6161", <<"a">>},
         {"6449455446", <<"IETF">>},
@@ -293,8 +290,7 @@ rfc_data_test() ->
                 <<"B">>, <<"b">>, <<"A">>, <<"a">>, {map, 5}],
             #{<<"a">> => <<"A">>, <<"b">> => <<"B">>, <<"c">> => <<"C">>,
                 <<"d">> => <<"D">>, <<"e">> => <<"E">>}},
-        % TODO
-        %(_ h'0102', h'030405')       5f42010243030405ff
+        {"5f42010243030405ff", [break, <<3, 4, 5>>, <<1, 2>>, strb], <<1, 2, 3, 4, 5>>},
         {"7f657374726561646d696e67ff",
             [break, <<"ming">>, <<"strea">>, strb],
             <<"streaming">>},
@@ -327,14 +323,14 @@ rfc_data_test() ->
         ?assertEqual(Result, build(Tokens))
     end, Testcases).
 
-bench() ->
+bench_test() ->
     Tc = [
         {"nd list", "9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff"},
         {"fixed list", "98190102030405060708090a0b0c0d0e0f101112131415161718181819"},
         {"fixed map", "a56161614161626142616361436164614461656145"},
         {"nested", "bf61610161629f0203ffff"}
     ],
-    N = 300000,
+    N = 1000,
     lists:foreach(fun({Name, Hex}) ->
         Bin = hexstr_to_bin(Hex),
         {Usec, ok} = timer:tc(fun() -> repeat_decode_n(N, Bin) end),
